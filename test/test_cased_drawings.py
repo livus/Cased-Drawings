@@ -1,9 +1,7 @@
 import random
 
-import gdMetriX
 import pytest
 import networkx as nx
-from matplotlib import pyplot as plt
 
 import cased_drawings
 import draw_cd

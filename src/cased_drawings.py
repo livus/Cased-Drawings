@@ -6,11 +6,17 @@ Creates cased drawing under different models and optimization goals using Gurobi
 
 from __future__ import annotations
 
+
+import logging
+
+logger = logging.getLogger(__name__)
+
 import json
 from typing import List, Optional, Dict
 from enum import Enum
 import argparse
 
+import gdMetriX
 import gurobipy as gp
 import numpy as np
 from gurobipy import GRB
@@ -78,6 +84,50 @@ def encase_drawing(
     :rtype: Optional[List[EncasedCrossing]]
     """
 
+    logger.debug("Begin splitting graph into components")
+
+    split_g = nx.Graph()
+    pos = gx.get_node_positions(g, pos)
+
+    for edge in g.edges():
+        first_node = (edge[0], edge)
+        second_node = (edge[1], edge)
+        split_g.add_node(first_node, pos=pos[edge[0]])
+        split_g.add_node(second_node, pos=pos[edge[1]])
+        split_g.add_edge(first_node, second_node)
+
+    planarized_g = split_g.copy()
+    gdMetriX.planarize(planarized_g, gx.get_node_positions(planarized_g))
+
+    encased_crossings = []
+
+    components = list(nx.connected_components(planarized_g))
+
+    logger.debug(f"Number of components: {len(components)}")
+
+    for component in components:
+        logger.debug(f"Solving component of size {len(component)}")
+        component_graph = split_g.subgraph(component)
+        encased_crossings += _encase_drawing_per_component(component_graph, goal, model)
+
+    # Replace new node names with original ones again
+    for crossing in encased_crossings:
+        crossing.involved_edges = [
+            (edge[0][0], edge[1][0]) for edge in crossing.involved_edges
+        ]
+        crossing.top_edge = (crossing.top_edge[0][0], crossing.top_edge[1][0])
+
+    return encased_crossings
+
+
+def _encase_drawing_per_component(
+    g: nx.Graph,
+    goal: OptimizationGoal,
+    model: CasedDrawingModel,
+    pos: str | Dict | None = None,
+    time_limit: int = 1800,
+    memory_limit: int = 8,
+) -> Optional[List[EncasedCrossing]]:
     pos = gx.get_node_positions(g, pos)
     crossings = gx.get_crossings(g, pos)
 
