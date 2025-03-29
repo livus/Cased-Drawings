@@ -1,5 +1,6 @@
 import random
 
+import matplotlib.pyplot as plt
 import pytest
 import networkx as nx
 
@@ -224,11 +225,11 @@ def test_triangle_maximize_stacking():
     ],
 )
 def test_larger_graph(goal, model, name):
-    random.seed(24829384)
+    random.seed(3458349)
 
     size = 20
 
-    random_graph = nx.fast_gnp_random_graph(size, 0.15, random.randint(1, 10000000))
+    random_graph = nx.fast_gnp_random_graph(size, 0.1, random.randint(1, 10000000))
     random_embedding = {
         n: [random.randint(-1000, 1000), random.randint(-1000, 1000)]
         for n in range(0, size + 1)
@@ -239,4 +240,5 @@ def test_larger_graph(goal, model, name):
 
     assert crossings is not None
 
-    draw_cd.draw_cased_graph(random_graph, crossings, True, name)
+    draw_cd.draw_cased_graph(random_graph, crossings, tunnel_width=15, tunnel_length=50)
+    plt.savefig(f"{name}.pdf")

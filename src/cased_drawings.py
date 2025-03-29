@@ -108,7 +108,9 @@ def encase_drawing(
     for component in components:
         logger.debug(f"Solving component of size {len(component)}")
         component_graph = split_g.subgraph(component)
-        encased_crossings += _encase_drawing_per_component(component_graph, goal, model)
+        encased_crossings += _encase_drawing_per_component(
+            component_graph, goal, model, gx.get_node_positions(component_graph), time_limit, memory_limit
+        )
 
     # Replace new node names with original ones again
     for crossing in encased_crossings:
@@ -124,10 +126,13 @@ def _encase_drawing_per_component(
     g: nx.Graph,
     goal: OptimizationGoal,
     model: CasedDrawingModel,
-    pos: str | Dict | None = None,
-    time_limit: int = 1800,
-    memory_limit: int = 8,
+    pos: str | Dict | None,
+    time_limit: int,
+    memory_limit: int,
 ) -> Optional[List[EncasedCrossing]]:
+
+    logging.debug("Building model...")
+
     pos = gx.get_node_positions(g, pos)
     crossings = gx.get_crossings(g, pos)
 
@@ -155,8 +160,6 @@ def _encase_drawing_per_component(
     # Get index of an edge
     _edge_keys = list(involved_edges.keys())
     edge_index = {_edge_keys[i]: i for i in range(len(_edge_keys))}
-
-    # TODO split up in connected components of intersection graph
 
     with gp.Env() as env, gp.Model("CD", env=env) as m:
 
@@ -384,10 +387,12 @@ def _encase_drawing_per_component(
             m.Params.TimeLimit = time_limit
             m.Params.SoftMemLimit = memory_limit
 
+            logging.debug("Solving model...")
+
             m.optimize()
 
             if m.status == GRB.OPTIMAL:
-                print(f"Found solution with optimal value {int(m.objVal)} ")
+                logging.debug(f"Found solution with optimal value {int(m.objVal)} ")
 
                 encased_crossings = []
 
@@ -413,7 +418,7 @@ def _encase_drawing_per_component(
                 return None
 
         except gp.GurobiError as e:
-            print(f"Error ({e.errno}): {e}")
+            logging.error(f"Error ({e.errno}): {e}")
 
 
 if __name__ == "__main__":
@@ -431,9 +436,9 @@ if __name__ == "__main__":
             with open(args.file, "r") as f:
                 g = json.load(f)
         except FileNotFoundError:
-            print(f"File '{args.file}' not found.")
+            logging.error(f"File '{args.file}' not found.")
         except json.JSONDecodeError:
-            print(f"Invalid file structure.")
+            logging.error(f"Invalid file structure.")
 
     else:
         # Demo graph
@@ -452,11 +457,11 @@ if __name__ == "__main__":
         g.add_edges_from([(1, 8), (2, 3), (4, 5), (6, 7), (3, 6)])
 
     pos = gx.get_node_positions(g)
-    print(args.goal, args.model)
+    logging.debug(args.goal, args.model)
     encasing = encase_drawing(
         g, OptimizationGoal(args.goal), CasedDrawingModel(args.model)
     )
-    print(encasing)
+    logging.debug(encasing)
 
     # Draw cased drawing
     nx.draw_networkx_edges(g, pos=pos)
