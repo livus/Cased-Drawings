@@ -3,12 +3,16 @@ Creates cased drawing under different models and optimization goals using Gurobi
 
 
 """
+
+from __future__ import annotations
+
 import json
-from typing import List, Optional
+from typing import List, Optional, Dict
 from enum import Enum
 import argparse
 
 import gurobipy as gp
+import numpy as np
 from gurobipy import GRB
 
 import networkx as nx
@@ -20,8 +24,9 @@ from draw_cd import EncasedCrossing, draw_edge_casing
 
 class OptimizationGoal(Enum):
     """
-        Available optimization goals
+    Available optimization goals
     """
+
     MinTotalSwitches = 1
     MaxTotalSwitches = 2
     MinMaxSwitches = 3
@@ -30,17 +35,32 @@ class OptimizationGoal(Enum):
 
 class CasedDrawingModel(Enum):
     """
-        Available models restricting the solution space
+    Available models restricting the solution space
     """
+
     Weaving = 1
     Stacking = 2
     Realizable = 3
 
 
-def encase_drawing(g: nx.Graph, goal: OptimizationGoal, model: CasedDrawingModel, pos=None,
-                   time_limit : int =1800, memory_limit : int =8) -> Optional[List[EncasedCrossing]]:
+def projection_position(A, B, P):
+    A, B, P = np.array(A), np.array(B), np.array(P)
+    AB = B - A
+    AP = P - A
+    return np.dot(AP, AB) / np.dot(AB, AB)
+
+
+def encase_drawing(
+    g: nx.Graph,
+    goal: OptimizationGoal,
+    model: CasedDrawingModel,
+    pos: str | Dict | None = None,
+    time_limit: int = 1800,
+    memory_limit: int = 8,
+) -> Optional[List[EncasedCrossing]]:
     """
-        Find a cased drawing for the given embedding.
+    Find a cased drawing for the given embedding.
+
     :param g: A networkX graph
     :type g: nx.Graph
     :param goal: The optimization goal
@@ -70,7 +90,15 @@ def encase_drawing(g: nx.Graph, goal: OptimizationGoal, model: CasedDrawingModel
                 involved_edges[edge].append(crossing)
             else:
                 involved_edges[edge] = [crossing]
-            # TODO order the crossings along the edge
+
+    # Order crossings along each edge
+    for edge, crossing_edges in involved_edges.items():
+        involved_edges[edge] = sorted(
+            crossing_edges,
+            key=lambda cr: projection_position(
+                pos[edge[0]], pos[edge[1]], (cr.pos.x, cr.pos.y)
+            ),
+        )
 
     crossings_per_edge = [len(crossings) for crossings in involved_edges.values()]
 
@@ -78,40 +106,93 @@ def encase_drawing(g: nx.Graph, goal: OptimizationGoal, model: CasedDrawingModel
     _edge_keys = list(involved_edges.keys())
     edge_index = {_edge_keys[i]: i for i in range(len(_edge_keys))}
 
+    # TODO split up in connected components of intersection graph
+
     with gp.Env() as env, gp.Model("CD", env=env) as m:
 
         try:
 
             # A variable c_ei indicating if the ith crossing on e is a bridge
 
-            c = m.addVars([(i, j) for i in range(len(involved_edges)) for j in range(crossings_per_edge[i])],
-                          vtype=GRB.BINARY, name="c")
+            c = m.addVars(
+                [
+                    (i, j)
+                    for i in range(len(involved_edges))
+                    for j in range(crossings_per_edge[i])
+                ],
+                vtype=GRB.BINARY,
+                name="c",
+            )
 
             # A variable s_e indicating the number of switches on an edge e
 
-            s = m.addVars([(i, j) for i in range(len(involved_edges)) for j in range(crossings_per_edge[i] - 1)],
-                          vtype=GRB.BINARY, name="s")
+            s = m.addVars(
+                [
+                    (i, j)
+                    for i in range(len(involved_edges))
+                    for j in range(crossings_per_edge[i] - 1)
+                ],
+                vtype=GRB.BINARY,
+                name="s",
+            )
 
             # Common constraints
 
             # (1) Exactly one crossing is a bridge at each crossing
 
             m.addConstrs(
-                ((gp.quicksum(c[edge_index[edge], 0] for edge in crossings[crossing_index].involved_edges) == 1) for
-                 crossing_index in range(len(crossings))),
-                name="one_bridge_only"
-            )  # TODO find second crossing index
+                (
+                    (
+                        gp.quicksum(
+                            c[
+                                edge_index[edge],
+                                involved_edges[edge].index(crossings[crossing_index]),
+                            ]  # TODO get index of crossing on edge more efficiently
+                            for edge in crossings[crossing_index].involved_edges
+                        )
+                        == 1
+                    )
+                    for crossing_index in range(len(crossings))
+                ),
+                name="one_bridge_only",
+            )
 
             # (2) Sum up crossing configurations to switches
 
-            m.addConstrs(((c[i, j] - c[i, j + 1] <= s[i, j]) for i in range(len(crossings_per_edge)) for j in
-                          range(crossings_per_edge[i] - 1)), name="s_bound_1")
-            m.addConstrs(((c[i, j + 1] - c[i, j] <= s[i, j]) for i in range(len(crossings_per_edge)) for j in
-                          range(crossings_per_edge[i] - 1)), name="s_bound_2")
-            m.addConstrs(((c[i, j] + c[i, j + 1] >= s[i, j] for i in range(len(crossings_per_edge)) for j in
-                           range(crossings_per_edge[i] - 1))))
-            m.addConstrs(((2 - (c[i, j] + c[i, j + 1]) >= s[i, j] for i in range(len(crossings_per_edge)) for j in
-                           range(crossings_per_edge[i] - 1))))
+            m.addConstrs(
+                (
+                    (c[i, j] - c[i, j + 1] <= s[i, j])
+                    for i in range(len(crossings_per_edge))
+                    for j in range(crossings_per_edge[i] - 1)
+                ),
+                name="s_bound_1",
+            )
+            m.addConstrs(
+                (
+                    (c[i, j + 1] - c[i, j] <= s[i, j])
+                    for i in range(len(crossings_per_edge))
+                    for j in range(crossings_per_edge[i] - 1)
+                ),
+                name="s_bound_2",
+            )
+            m.addConstrs(
+                (
+                    (
+                        c[i, j] + c[i, j + 1] >= s[i, j]
+                        for i in range(len(crossings_per_edge))
+                        for j in range(crossings_per_edge[i] - 1)
+                    )
+                )
+            )
+            m.addConstrs(
+                (
+                    (
+                        2 - (c[i, j] + c[i, j + 1]) >= s[i, j]
+                        for i in range(len(crossings_per_edge))
+                        for j in range(crossings_per_edge[i] - 1)
+                    )
+                )
+            )
 
             # Optimization goals
 
@@ -119,22 +200,35 @@ def encase_drawing(g: nx.Graph, goal: OptimizationGoal, model: CasedDrawingModel
                 case OptimizationGoal.MinTotalSwitches:
                     m.setObjective(
                         gp.quicksum(
-                            s[i, j] for i in range(len(crossings_per_edge)) for j in range(crossings_per_edge[i] - 1))
-                        , GRB.MINIMIZE)
+                            s[i, j]
+                            for i in range(len(crossings_per_edge))
+                            for j in range(crossings_per_edge[i] - 1)
+                        ),
+                        GRB.MINIMIZE,
+                    )
 
                 case OptimizationGoal.MaxTotalSwitches:
                     m.setObjective(
                         gp.quicksum(
-                            s[i, j] for i in range(len(crossings_per_edge)) for j in range(crossings_per_edge[i] - 1))
-                        , GRB.MAXIMIZE)
+                            s[i, j]
+                            for i in range(len(crossings_per_edge))
+                            for j in range(crossings_per_edge[i] - 1)
+                        ),
+                        GRB.MAXIMIZE,
+                    )
 
                 case OptimizationGoal.MinMaxSwitches:
                     z = m.addVar(vtype=GRB.INTEGER, name="z")
 
                     m.addConstrs(
-                        (gp.quicksum(s[i, j] for j in range(crossings_per_edge[i] - 1)) <= z for i in
-                         range(len(crossings_per_edge))),
-                        "switches_per_edge"
+                        (
+                            gp.quicksum(
+                                s[i, j] for j in range(crossings_per_edge[i] - 1)
+                            )
+                            <= z
+                            for i in range(len(crossings_per_edge))
+                        ),
+                        "switches_per_edge",
                     )
 
                     m.setObjective(z, GRB.MINIMIZE)
@@ -144,12 +238,22 @@ def encase_drawing(g: nx.Graph, goal: OptimizationGoal, model: CasedDrawingModel
                     b = m.addVars(len(crossings_per_edge), vtype=GRB.BINARY, name="b")
 
                     m.addConstrs(
-                        ((gp.quicksum(s[i, j] for j in range(crossings_per_edge[i] - 1)) <= big_M * b[i]) for i in
-                         range(len(crossings_per_edge))),
-                        "edges_with_at_least_one_switch"
+                        (
+                            (
+                                gp.quicksum(
+                                    s[i, j] for j in range(crossings_per_edge[i] - 1)
+                                )
+                                <= big_M * b[i]
+                            )
+                            for i in range(len(crossings_per_edge))
+                        ),
+                        "edges_with_at_least_one_switch",
                     )
 
-                    m.setObjective(gp.quicksum(b[i] for i in range(len(crossings_per_edge))), GRB.MINIMIZE)
+                    m.setObjective(
+                        gp.quicksum(b[i] for i in range(len(crossings_per_edge))),
+                        GRB.MINIMIZE,
+                    )
 
             # Model restrictions
 
@@ -162,20 +266,41 @@ def encase_drawing(g: nx.Graph, goal: OptimizationGoal, model: CasedDrawingModel
                     # Variables for the total order
                     o = m.addVars(len(crossings_per_edge), vtype=GRB.INTEGER, name="o")
                     b2 = m.addVars(
-                        [(i, j) for i in range(len(crossings_per_edge)) for j in range(len(crossings_per_edge)) if
-                         i != j],
+                        [
+                            (i, j)
+                            for i in range(len(crossings_per_edge))
+                            for j in range(len(crossings_per_edge))
+                            if i != j
+                        ],
                         vtype=GRB.BINARY,
-                        name="b2")
+                        name="b2",
+                    )
 
                     # Constraints for the total order
 
-                    m.addConstrs(o[i] <= len(crossings_per_edge) for i in range(len(crossings_per_edge)))
-
-                    m.addConstrs((o[i] - o[j] - big_M * b2[i, j] <= -1 for i in range(len(crossings_per_edge)) for j in
-                                  range(len(crossings_per_edge)) if i != j), name="total_order_1")
                     m.addConstrs(
-                        (o[j] - o[i] - big_M * (1 - b2[i, j]) <= -1 for i in range(len(crossings_per_edge)) for j in
-                         range(len(crossings_per_edge)) if i != j), name="total_order_2")
+                        o[i] <= len(crossings_per_edge)
+                        for i in range(len(crossings_per_edge))
+                    )
+
+                    m.addConstrs(
+                        (
+                            o[i] - o[j] - big_M * b2[i, j] <= -1
+                            for i in range(len(crossings_per_edge))
+                            for j in range(len(crossings_per_edge))
+                            if i != j
+                        ),
+                        name="total_order_1",
+                    )
+                    m.addConstrs(
+                        (
+                            o[j] - o[i] - big_M * (1 - b2[i, j]) <= -1
+                            for i in range(len(crossings_per_edge))
+                            for j in range(len(crossings_per_edge))
+                            if i != j
+                        ),
+                        name="total_order_2",
+                    )
 
                     # Ensure transitivity (optional, already satisfied by above constraints, might help speed thinks up)
                     # m.addConstrs((b2[i, j] + b2[j, i] == 1 for i in range(len(crossings_per_edge)) for j in
@@ -187,10 +312,14 @@ def encase_drawing(g: nx.Graph, goal: OptimizationGoal, model: CasedDrawingModel
                     # Crossings must oblige to the total order
 
                     m.addConstrs(
-                        (o[i] - o[edge_index[k]] + big_M * (1 - c[i, j]) >= 0 for i in range(len(crossings_per_edge))
-                         for j in range(crossings_per_edge[i]) for k in involved_edges[_edge_keys[i]][j].involved_edges
-                         if edge_index[k] != i),
-                        name="stacking_model_adherence"
+                        (
+                            o[i] - o[edge_index[k]] + big_M * (1 - c[i, j]) >= 0
+                            for i in range(len(crossings_per_edge))
+                            for j in range(crossings_per_edge[i])
+                            for k in involved_edges[_edge_keys[i]][j].involved_edges
+                            if edge_index[k] != i
+                        ),
+                        name="stacking_model_adherence",
                     )
 
                 case CasedDrawingModel.Realizable:
@@ -209,7 +338,6 @@ def encase_drawing(g: nx.Graph, goal: OptimizationGoal, model: CasedDrawingModel
 
             if m.status == GRB.OPTIMAL:
                 print(f"Found solution with optimal value {int(m.objVal)} ")
-                # print(c)
 
                 encased_crossings = []
 
@@ -219,7 +347,13 @@ def encase_drawing(g: nx.Graph, goal: OptimizationGoal, model: CasedDrawingModel
                     for edge_a_index in range(len(encased_crossing.involved_edges)):
                         edge_a = list(encased_crossing.involved_edges)[edge_a_index]
 
-                        if c[edge_index[edge_a], involved_edges[edge_a].index(crossing)].X > 0.5:
+                        if (
+                            c[
+                                edge_index[edge_a],
+                                involved_edges[edge_a].index(crossing),
+                            ].X
+                            > 0.5
+                        ):
                             encased_crossing.top_edge = edge_a
 
                     encased_crossings.append(encased_crossing)
@@ -232,7 +366,7 @@ def encase_drawing(g: nx.Graph, goal: OptimizationGoal, model: CasedDrawingModel
             print(f"Error ({e.errno}): {e}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
 
     # Command line arguments
     parser = argparse.ArgumentParser(description="Find cased drawing")
@@ -244,7 +378,7 @@ if __name__ == '__main__':
 
     if args.file:
         try:
-            with open(args.file, 'r') as f:
+            with open(args.file, "r") as f:
                 g = json.load(f)
         except FileNotFoundError:
             print(f"File '{args.file}' not found.")
@@ -269,14 +403,15 @@ if __name__ == '__main__':
 
     pos = gx.get_node_positions(g)
     print(args.goal, args.model)
-    encasing = encase_drawing(g, OptimizationGoal(args.goal), CasedDrawingModel(args.model))
+    encasing = encase_drawing(
+        g, OptimizationGoal(args.goal), CasedDrawingModel(args.model)
+    )
     print(encasing)
 
     # Draw cased drawing
     nx.draw_networkx_edges(g, pos=pos)
     draw_edge_casing(encasing, pos)
     nx.draw_networkx_nodes(g, pos=pos)
-
 
     if args.output:
         plt.savefig(args.output)
