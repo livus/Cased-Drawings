@@ -298,6 +298,7 @@ def _encase_drawing_per_component(
                 case CasedDrawingModel.Weaving:
                     # Nothing to do
                     pass
+
                 case CasedDrawingModel.Stacking:
 
                     # Variables for the total order
@@ -359,7 +360,55 @@ def _encase_drawing_per_component(
                     )
 
                 case CasedDrawingModel.Realizable:
-                    pass  # TODO
+
+                    d = m.addVars(
+                        len(cr_nr_per_edge), vtype=GRB.CONTINUOUS, name="d", ub=1
+                    )
+                    l = m.addVars(
+                        len(cr_nr_per_edge), vtype=GRB.CONTINUOUS, name="l", ub=1
+                    )
+
+                    m.addConstrs(
+                        (
+                            -(
+                                d[i]
+                                + l[i]
+                                * draw_cd.projection_position(
+                                    pos[_edge_keys[i][0]],
+                                    pos[_edge_keys[i][1]],
+                                    (
+                                        crossings_per_edge[_edge_keys[i]][cr_idx].pos.x,
+                                        crossings_per_edge[_edge_keys[i]][cr_idx].pos.y,
+                                    ),
+                                )
+                            )  # Height of first edge at crossing
+                            + (
+                                d[j]
+                                + l[j]
+                                * draw_cd.projection_position(
+                                    pos[_edge_keys[j][0]],
+                                    pos[_edge_keys[j][1]],
+                                    (
+                                        crossings_per_edge[_edge_keys[i]][cr_idx].pos.x,
+                                        crossings_per_edge[_edge_keys[i]][cr_idx].pos.y,
+                                    ),
+                                )
+                            )  # Height of first edge at crossing
+                            - big_M * (1 - c[i, cr_idx])
+                            <= 0
+                            for i in range(len(cr_nr_per_edge))
+                            for cr_idx in range(cr_nr_per_edge[i] - 1)
+                            for j in range(
+                                len(
+                                    crossings_per_edge[_edge_keys[i]][
+                                        cr_idx
+                                    ].involved_edges
+                                )
+                                - 1
+                            )
+                        ),
+                        name="realizable_model_adherence",
+                    )
 
             # Solve
 

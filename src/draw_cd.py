@@ -39,7 +39,7 @@ def get_crossings_per_edge_sorted(
     for edge, crossing_edges in crossings_per_edge.items():
         crossings_per_edge[edge] = sorted(
             crossing_edges,
-            key=lambda cr: _projection_position(
+            key=lambda cr: projection_position(
                 pos[edge[0]], pos[edge[1]], (cr.pos.x, cr.pos.y)
             ),
         )
@@ -47,7 +47,7 @@ def get_crossings_per_edge_sorted(
     return crossings_per_edge
 
 
-def _projection_position(a, b, p):
+def projection_position(a, b, p):
     a, b, p = np.array(a), np.array(b), np.array(p)
     ab = b - a
     ap = p - a
