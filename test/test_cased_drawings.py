@@ -240,5 +240,5 @@ def test_larger_graph(goal, model, name):
 
     assert crossings is not None
 
-    draw_cd.draw_cased_graph(random_graph, crossings, tunnel_width=15, tunnel_length=50)
+    draw_cd.draw_cased_graph(random_graph, crossings)
     plt.savefig(f"{name}.pdf")

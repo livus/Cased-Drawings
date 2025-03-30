@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import logging
 
+import draw_cd
+
 logger = logging.getLogger(__name__)
 
 import json
@@ -25,7 +27,7 @@ import networkx as nx
 import gdMetriX as gx
 import matplotlib.pyplot as plt
 
-from draw_cd import EncasedCrossing, draw_edge_casing
+from draw_cd import EncasedCrossing, draw_cased_edges
 
 
 class OptimizationGoal(Enum):
@@ -47,13 +49,6 @@ class CasedDrawingModel(Enum):
     Weaving = 1
     Stacking = 2
     Realizable = 3
-
-
-def projection_position(A, B, P):
-    A, B, P = np.array(A), np.array(B), np.array(P)
-    AB = B - A
-    AP = P - A
-    return np.dot(AP, AB) / np.dot(AB, AB)
 
 
 def encase_drawing(
@@ -109,7 +104,12 @@ def encase_drawing(
         logger.debug(f"Solving component of size {len(component)}")
         component_graph = split_g.subgraph(component)
         encased_crossings += _encase_drawing_per_component(
-            component_graph, goal, model, gx.get_node_positions(component_graph), time_limit, memory_limit
+            component_graph,
+            goal,
+            model,
+            gx.get_node_positions(component_graph),
+            time_limit,
+            memory_limit,
         )
 
     # Replace new node names with original ones again
@@ -138,27 +138,11 @@ def _encase_drawing_per_component(
 
     big_M = g.number_of_nodes() + g.number_of_edges()
 
-    involved_edges = {}
-    for crossing in crossings:
-        for edge in crossing.involved_edges:
-            if edge in involved_edges:
-                involved_edges[edge].append(crossing)
-            else:
-                involved_edges[edge] = [crossing]
-
-    # Order crossings along each edge
-    for edge, crossing_edges in involved_edges.items():
-        involved_edges[edge] = sorted(
-            crossing_edges,
-            key=lambda cr: projection_position(
-                pos[edge[0]], pos[edge[1]], (cr.pos.x, cr.pos.y)
-            ),
-        )
-
-    crossings_per_edge = [len(crossings) for crossings in involved_edges.values()]
+    crossings_per_edge = draw_cd.get_crossings_per_edge_sorted(crossings, pos)
+    cr_nr_per_edge = [len(crossings) for crossings in crossings_per_edge.values()]
 
     # Get index of an edge
-    _edge_keys = list(involved_edges.keys())
+    _edge_keys = list(crossings_per_edge.keys())
     edge_index = {_edge_keys[i]: i for i in range(len(_edge_keys))}
 
     with gp.Env() as env, gp.Model("CD", env=env) as m:
@@ -170,8 +154,8 @@ def _encase_drawing_per_component(
             c = m.addVars(
                 [
                     (i, j)
-                    for i in range(len(involved_edges))
-                    for j in range(crossings_per_edge[i])
+                    for i in range(len(crossings_per_edge))
+                    for j in range(cr_nr_per_edge[i])
                 ],
                 vtype=GRB.BINARY,
                 name="c",
@@ -182,8 +166,8 @@ def _encase_drawing_per_component(
             s = m.addVars(
                 [
                     (i, j)
-                    for i in range(len(involved_edges))
-                    for j in range(crossings_per_edge[i] - 1)
+                    for i in range(len(crossings_per_edge))
+                    for j in range(cr_nr_per_edge[i] - 1)
                 ],
                 vtype=GRB.BINARY,
                 name="s",
@@ -199,8 +183,10 @@ def _encase_drawing_per_component(
                         gp.quicksum(
                             c[
                                 edge_index[edge],
-                                involved_edges[edge].index(crossings[crossing_index]),
-                            ]  # TODO get index of crossing on edge more efficiently
+                                crossings_per_edge[edge].index(
+                                    crossings[crossing_index]
+                                ),
+                            ]
                             for edge in crossings[crossing_index].involved_edges
                         )
                         == 1
@@ -215,16 +201,16 @@ def _encase_drawing_per_component(
             m.addConstrs(
                 (
                     (c[i, j] - c[i, j + 1] <= s[i, j])
-                    for i in range(len(crossings_per_edge))
-                    for j in range(crossings_per_edge[i] - 1)
+                    for i in range(len(cr_nr_per_edge))
+                    for j in range(cr_nr_per_edge[i] - 1)
                 ),
                 name="s_bound_1",
             )
             m.addConstrs(
                 (
                     (c[i, j + 1] - c[i, j] <= s[i, j])
-                    for i in range(len(crossings_per_edge))
-                    for j in range(crossings_per_edge[i] - 1)
+                    for i in range(len(cr_nr_per_edge))
+                    for j in range(cr_nr_per_edge[i] - 1)
                 ),
                 name="s_bound_2",
             )
@@ -232,8 +218,8 @@ def _encase_drawing_per_component(
                 (
                     (
                         c[i, j] + c[i, j + 1] >= s[i, j]
-                        for i in range(len(crossings_per_edge))
-                        for j in range(crossings_per_edge[i] - 1)
+                        for i in range(len(cr_nr_per_edge))
+                        for j in range(cr_nr_per_edge[i] - 1)
                     )
                 )
             )
@@ -241,8 +227,8 @@ def _encase_drawing_per_component(
                 (
                     (
                         2 - (c[i, j] + c[i, j + 1]) >= s[i, j]
-                        for i in range(len(crossings_per_edge))
-                        for j in range(crossings_per_edge[i] - 1)
+                        for i in range(len(cr_nr_per_edge))
+                        for j in range(cr_nr_per_edge[i] - 1)
                     )
                 )
             )
@@ -254,8 +240,8 @@ def _encase_drawing_per_component(
                     m.setObjective(
                         gp.quicksum(
                             s[i, j]
-                            for i in range(len(crossings_per_edge))
-                            for j in range(crossings_per_edge[i] - 1)
+                            for i in range(len(cr_nr_per_edge))
+                            for j in range(cr_nr_per_edge[i] - 1)
                         ),
                         GRB.MINIMIZE,
                     )
@@ -264,8 +250,8 @@ def _encase_drawing_per_component(
                     m.setObjective(
                         gp.quicksum(
                             s[i, j]
-                            for i in range(len(crossings_per_edge))
-                            for j in range(crossings_per_edge[i] - 1)
+                            for i in range(len(cr_nr_per_edge))
+                            for j in range(cr_nr_per_edge[i] - 1)
                         ),
                         GRB.MAXIMIZE,
                     )
@@ -275,11 +261,9 @@ def _encase_drawing_per_component(
 
                     m.addConstrs(
                         (
-                            gp.quicksum(
-                                s[i, j] for j in range(crossings_per_edge[i] - 1)
-                            )
+                            gp.quicksum(s[i, j] for j in range(cr_nr_per_edge[i] - 1))
                             <= z
-                            for i in range(len(crossings_per_edge))
+                            for i in range(len(cr_nr_per_edge))
                         ),
                         "switches_per_edge",
                     )
@@ -288,23 +272,23 @@ def _encase_drawing_per_component(
 
                 case OptimizationGoal.MinSwitchEdges:
 
-                    b = m.addVars(len(crossings_per_edge), vtype=GRB.BINARY, name="b")
+                    b = m.addVars(len(cr_nr_per_edge), vtype=GRB.BINARY, name="b")
 
                     m.addConstrs(
                         (
                             (
                                 gp.quicksum(
-                                    s[i, j] for j in range(crossings_per_edge[i] - 1)
+                                    s[i, j] for j in range(cr_nr_per_edge[i] - 1)
                                 )
                                 <= big_M * b[i]
                             )
-                            for i in range(len(crossings_per_edge))
+                            for i in range(len(cr_nr_per_edge))
                         ),
                         "edges_with_at_least_one_switch",
                     )
 
                     m.setObjective(
-                        gp.quicksum(b[i] for i in range(len(crossings_per_edge))),
+                        gp.quicksum(b[i] for i in range(len(cr_nr_per_edge))),
                         GRB.MINIMIZE,
                     )
 
@@ -317,12 +301,12 @@ def _encase_drawing_per_component(
                 case CasedDrawingModel.Stacking:
 
                     # Variables for the total order
-                    o = m.addVars(len(crossings_per_edge), vtype=GRB.INTEGER, name="o")
+                    o = m.addVars(len(cr_nr_per_edge), vtype=GRB.INTEGER, name="o")
                     b2 = m.addVars(
                         [
                             (i, j)
-                            for i in range(len(crossings_per_edge))
-                            for j in range(len(crossings_per_edge))
+                            for i in range(len(cr_nr_per_edge))
+                            for j in range(len(cr_nr_per_edge))
                             if i != j
                         ],
                         vtype=GRB.BINARY,
@@ -332,15 +316,14 @@ def _encase_drawing_per_component(
                     # Constraints for the total order
 
                     m.addConstrs(
-                        o[i] <= len(crossings_per_edge)
-                        for i in range(len(crossings_per_edge))
+                        o[i] <= len(cr_nr_per_edge) for i in range(len(cr_nr_per_edge))
                     )
 
                     m.addConstrs(
                         (
                             o[i] - o[j] - big_M * b2[i, j] <= -1
-                            for i in range(len(crossings_per_edge))
-                            for j in range(len(crossings_per_edge))
+                            for i in range(len(cr_nr_per_edge))
+                            for j in range(len(cr_nr_per_edge))
                             if i != j
                         ),
                         name="total_order_1",
@@ -348,8 +331,8 @@ def _encase_drawing_per_component(
                     m.addConstrs(
                         (
                             o[j] - o[i] - big_M * (1 - b2[i, j]) <= -1
-                            for i in range(len(crossings_per_edge))
-                            for j in range(len(crossings_per_edge))
+                            for i in range(len(cr_nr_per_edge))
+                            for j in range(len(cr_nr_per_edge))
                             if i != j
                         ),
                         name="total_order_2",
@@ -367,9 +350,9 @@ def _encase_drawing_per_component(
                     m.addConstrs(
                         (
                             o[i] - o[edge_index[k]] + big_M * (1 - c[i, j]) >= 0
-                            for i in range(len(crossings_per_edge))
-                            for j in range(crossings_per_edge[i])
-                            for k in involved_edges[_edge_keys[i]][j].involved_edges
+                            for i in range(len(cr_nr_per_edge))
+                            for j in range(cr_nr_per_edge[i])
+                            for k in crossings_per_edge[_edge_keys[i]][j].involved_edges
                             if edge_index[k] != i
                         ),
                         name="stacking_model_adherence",
@@ -405,7 +388,7 @@ def _encase_drawing_per_component(
                         if (
                             c[
                                 edge_index[edge_a],
-                                involved_edges[edge_a].index(crossing),
+                                crossings_per_edge[edge_a].index(crossing),
                             ].X
                             > 0.5
                         ):
@@ -464,9 +447,7 @@ if __name__ == "__main__":
     logging.debug(encasing)
 
     # Draw cased drawing
-    nx.draw_networkx_edges(g, pos=pos)
-    draw_edge_casing(encasing, pos)
-    nx.draw_networkx_nodes(g, pos=pos)
+    draw_cd.draw_cased_graph(g, encasing)
 
     if args.output:
         plt.savefig(args.output)
