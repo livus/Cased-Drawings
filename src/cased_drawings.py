@@ -8,13 +8,15 @@ from __future__ import annotations
 
 
 import logging
+import sys
+from itertools import combinations, permutations
 
 import draw_cd
 
 logger = logging.getLogger(__name__)
 
 import json
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 from enum import Enum
 import argparse
 
@@ -28,6 +30,11 @@ import gdMetriX as gx
 import matplotlib.pyplot as plt
 
 from draw_cd import EncasedCrossing, draw_cased_edges
+
+# Load Gurobi beforehand
+env = gp.Env(empty=True)
+env.setParam("OutputFlag", 0)
+env.start()
 
 
 class OptimizationGoal(Enum):
@@ -58,7 +65,7 @@ def encase_drawing(
     pos: str | Dict | None = None,
     time_limit: int = 1800,
     memory_limit: int = 8,
-) -> Optional[List[EncasedCrossing]]:
+) -> Tuple[Optional[List[EncasedCrossing]], int]:
     """
     Find a cased drawing for the given embedding.
 
@@ -95,6 +102,7 @@ def encase_drawing(
     gdMetriX.planarize(planarized_g, gx.get_node_positions(planarized_g))
 
     encased_crossings = []
+    total_costs = 0
 
     components = list(nx.connected_components(planarized_g))
 
@@ -103,7 +111,7 @@ def encase_drawing(
     for component in components:
         logger.debug(f"Solving component of size {len(component)}")
         component_graph = split_g.subgraph(component)
-        encased_crossings += _encase_drawing_per_component(
+        casing, cost = _encase_drawing_per_component(
             component_graph,
             goal,
             model,
@@ -111,6 +119,8 @@ def encase_drawing(
             time_limit,
             memory_limit,
         )
+        encased_crossings += casing
+        total_costs += cost
 
     # Replace new node names with original ones again
     for crossing in encased_crossings:
@@ -119,7 +129,7 @@ def encase_drawing(
         ]
         crossing.top_edge = (crossing.top_edge[0][0], crossing.top_edge[1][0])
 
-    return encased_crossings
+    return encased_crossings, total_costs
 
 
 def _encase_drawing_per_component(
@@ -129,7 +139,7 @@ def _encase_drawing_per_component(
     pos: str | Dict | None,
     time_limit: int,
     memory_limit: int,
-) -> Optional[List[EncasedCrossing]]:
+) -> Tuple[Optional[List[EncasedCrossing]], int]:
 
     logging.debug("Building model...")
 
@@ -145,7 +155,7 @@ def _encase_drawing_per_component(
     _edge_keys = list(crossings_per_edge.keys())
     edge_index = {_edge_keys[i]: i for i in range(len(_edge_keys))}
 
-    with gp.Env() as env, gp.Model("CD", env=env) as m:
+    with gp.Model("CD", env=env) as m:
 
         try:
 
@@ -373,15 +383,33 @@ def _encase_drawing_per_component(
                             edge_a_idx = edge_index[edge_a]
                             edge_b_idx = edge_index[edge_b]
 
-                            edge_a_percentage = draw_cd.projection_position(pos[edge_a[0]], pos[edge_a[1]], (crossing.pos.x, crossing.pos.y))
-                            edge_b_percentage = draw_cd.projection_position(pos[edge_b[0]], pos[edge_b[1]], (crossing.pos.x, crossing.pos.y))
+                            edge_a_percentage = draw_cd.projection_position(
+                                pos[edge_a[0]],
+                                pos[edge_a[1]],
+                                (crossing.pos.x, crossing.pos.y),
+                            )
+                            edge_b_percentage = draw_cd.projection_position(
+                                pos[edge_b[0]],
+                                pos[edge_b[1]],
+                                (crossing.pos.x, crossing.pos.y),
+                            )
 
                             cr_idx = crossings_per_edge[edge_a].index(crossing)
 
-                            m.addConstr( (d[edge_a_idx] + l[edge_a_idx] * edge_a_percentage)  # Height of edge a at crossing
-                                         - (d[edge_b_idx] + l[edge_b_idx] * edge_b_percentage) # Height of edge b at crossing
-                                         + 2 * (1 - c[edge_a_idx, cr_idx]) # Only apply constraint if edge_a is a top_edge
-                                         >= 0, name=f"realizable_model_{edge_a_idx}_{edge_b_idx}" )
+                            m.addConstr(
+                                (
+                                    d[edge_a_idx] + l[edge_a_idx] * edge_a_percentage
+                                )  # Height of edge a at crossing
+                                - (
+                                    d[edge_b_idx] + l[edge_b_idx] * edge_b_percentage
+                                )  # Height of edge b at crossing
+                                + 2
+                                * (
+                                    1 - c[edge_a_idx, cr_idx]
+                                )  # Only apply constraint if edge_a is a top_edge
+                                >= 0,
+                                name=f"realizable_model_{edge_a_idx}_{edge_b_idx}",
+                            )
 
             # Solve
 
@@ -418,9 +446,9 @@ def _encase_drawing_per_component(
 
                     encased_crossings.append(encased_crossing)
 
-                return encased_crossings
+                return encased_crossings, int(m.objVal)
             else:
-                return None
+                return None, sys.maxsize
 
         except gp.GurobiError as e:
             logging.error(f"Error ({e.errno}): {e}")
@@ -463,7 +491,7 @@ if __name__ == "__main__":
 
     pos = gx.get_node_positions(g)
     logging.debug(args.goal, args.model)
-    encasing = encase_drawing(
+    encasing, cost = encase_drawing(
         g, OptimizationGoal(args.goal), CasedDrawingModel(args.model)
     )
     logging.debug(encasing)

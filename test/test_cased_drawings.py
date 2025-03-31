@@ -1,22 +1,21 @@
 import random
 
-import matplotlib.pyplot as plt
 import pytest
 import networkx as nx
 
 import cased_drawings
-import draw_cd
 from cased_drawings import OptimizationGoal, CasedDrawingModel
 
 
 def test_empty_graph():
     g = nx.Graph()
 
-    crossings = cased_drawings.encase_drawing(
+    crossings, cost = cased_drawings.encase_drawing(
         g, OptimizationGoal.MaxTotalSwitches, CasedDrawingModel.Weaving
     )
 
     assert len(crossings) == 0
+    assert cost == 0
 
 
 def test_single_crossing():
@@ -28,12 +27,13 @@ def test_single_crossing():
     g.add_node(4, pos=(1, 0))
     g.add_edges_from(edges)
 
-    crossings = cased_drawings.encase_drawing(
+    crossings, cost = cased_drawings.encase_drawing(
         g, OptimizationGoal.MinTotalSwitches, CasedDrawingModel.Weaving
     )
 
     assert len(crossings) == 1
     assert crossings[0].top_edge in edges
+    assert cost == 0
 
 
 @pytest.mark.parametrize(
@@ -62,7 +62,7 @@ def test_three_crossings_on_edge_minimize(goal, model):
     g.add_node(8, pos=(3, -1))
     g.add_edges_from([(1, 2), (3, 4), (5, 6), (7, 8)])
 
-    crossings = cased_drawings.encase_drawing(g, goal, model)
+    crossings, cost = cased_drawings.encase_drawing(g, goal, model)
 
     assert len(crossings) == 3
 
@@ -73,6 +73,8 @@ def test_three_crossings_on_edge_minimize(goal, model):
         # The three short edges are on top
         assert crossings[1].top_edge != (1, 2)
         assert crossings[2].top_edge != (1, 2)
+
+    assert cost == 0
 
 
 @pytest.mark.parametrize(
@@ -95,7 +97,7 @@ def test_three_crossings_on_edge_maximize(model):
     g.add_node(8, pos=(3, -1))
     g.add_edges_from([(1, 2), (3, 4), (5, 6), (7, 8)])
 
-    crossings = cased_drawings.encase_drawing(
+    crossings, cost = cased_drawings.encase_drawing(
         g, OptimizationGoal.MaxTotalSwitches, model
     )
 
@@ -106,6 +108,8 @@ def test_three_crossings_on_edge_maximize(model):
     assert (
         crossings[0].top_edge == (1, 2) and crossings[2].top_edge == (1, 2)
     ) or crossings[1].top_edge == (1, 2)
+
+    assert cost == 2
 
 
 @pytest.mark.parametrize(
@@ -125,7 +129,7 @@ def test_triangle_maximize(model):
     g.add_node(6, pos=(0.4, 1))
     g.add_edges_from([(1, 2), (3, 4), (5, 6)])
 
-    crossings = cased_drawings.encase_drawing(
+    crossings, cost = cased_drawings.encase_drawing(
         g, OptimizationGoal.MaxTotalSwitches, model
     )
 
@@ -134,6 +138,8 @@ def test_triangle_maximize(model):
     assert crossings[0].top_edge != crossings[1].top_edge
     assert crossings[1].top_edge != crossings[2].top_edge
     assert crossings[2].top_edge != crossings[0].top_edge
+
+    assert cost == 3
 
 
 def test_triangle_maximize_stacking():
@@ -146,7 +152,7 @@ def test_triangle_maximize_stacking():
     g.add_node(6, pos=(0.4, 1))
     g.add_edges_from([(1, 2), (3, 4), (5, 6)])
 
-    crossings = cased_drawings.encase_drawing(
+    crossings, cost = cased_drawings.encase_drawing(
         g, OptimizationGoal.MaxTotalSwitches, CasedDrawingModel.Stacking
     )
 
@@ -157,6 +163,8 @@ def test_triangle_maximize_stacking():
         or (crossings[0].top_edge == crossings[2].top_edge)
         or (crossings[1].top_edge == crossings[2].top_edge)
     )
+
+    assert cost == 1
 
 
 @pytest.mark.parametrize(
@@ -236,9 +244,7 @@ def test_larger_graph(goal, model, name):
     }
     nx.set_node_attributes(random_graph, random_embedding, "pos")
 
-    crossings = cased_drawings.encase_drawing(random_graph, goal, model)
+    crossings, cost = cased_drawings.encase_drawing(random_graph, goal, model)
 
     assert crossings is not None
-
-    draw_cd.draw_cased_graph(random_graph, crossings)
-    plt.savefig(f"{name}.pdf")
+    assert cost >= 0

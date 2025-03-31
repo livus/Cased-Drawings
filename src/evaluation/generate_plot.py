@@ -89,14 +89,13 @@ for mod_idx, model in enumerate([m.value for m in CasedDrawingModel]):
 
 for mod_idx, model in enumerate([m.value for m in CasedDrawingModel]):
     for goal_idx, goal in enumerate([o.value for o in OptimizationGoal]):
-
         ax = axes[mod_idx, goal_idx]  # Get corresponding axis
         ax.set_xticks([])  # Remove x ticks
         ax.set_yticks([])  # Remove y ticks
         ax.set_aspect("equal")
         print(goal)
         print(model)
-        casing = cased_drawings.encase_drawing(
+        casing, cost = cased_drawings.encase_drawing(
             random_graph, OptimizationGoal(goal), CasedDrawingModel(model)
         )
 
@@ -107,5 +106,5 @@ for mod_idx, model in enumerate([m.value for m in CasedDrawingModel]):
 
 plt.tight_layout()  # Adjust layout
 
-plt.savefig(f"overview.pdf", format="pdf")
+plt.savefig(f"milp_overview.pdf", format="pdf")
 plt.show()
