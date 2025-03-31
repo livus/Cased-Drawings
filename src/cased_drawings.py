@@ -368,47 +368,20 @@ def _encase_drawing_per_component(
                         len(cr_nr_per_edge), vtype=GRB.CONTINUOUS, name="l", ub=1
                     )
 
-                    m.addConstrs(
-                        (
-                            -(
-                                d[i]
-                                + l[i]
-                                * draw_cd.projection_position(
-                                    pos[_edge_keys[i][0]],
-                                    pos[_edge_keys[i][1]],
-                                    (
-                                        crossings_per_edge[_edge_keys[i]][cr_idx].pos.x,
-                                        crossings_per_edge[_edge_keys[i]][cr_idx].pos.y,
-                                    ),
-                                )
-                            )  # Height of first edge at crossing
-                            + (
-                                d[j]
-                                + l[j]
-                                * draw_cd.projection_position(
-                                    pos[_edge_keys[j][0]],
-                                    pos[_edge_keys[j][1]],
-                                    (
-                                        crossings_per_edge[_edge_keys[i]][cr_idx].pos.x,
-                                        crossings_per_edge[_edge_keys[i]][cr_idx].pos.y,
-                                    ),
-                                )
-                            )  # Height of first edge at crossing
-                            - big_M * (1 - c[i, cr_idx])
-                            <= 0
-                            for i in range(len(cr_nr_per_edge))
-                            for cr_idx in range(cr_nr_per_edge[i] - 1)
-                            for j in range(
-                                len(
-                                    crossings_per_edge[_edge_keys[i]][
-                                        cr_idx
-                                    ].involved_edges
-                                )
-                                - 1
-                            )
-                        ),
-                        name="realizable_model_adherence",
-                    )
+                    for crossing in crossings:
+                        for edge_a, edge_b in permutations(crossing.involved_edges, 2):
+                            edge_a_idx = edge_index[edge_a]
+                            edge_b_idx = edge_index[edge_b]
+
+                            edge_a_percentage = draw_cd.projection_position(pos[edge_a[0]], pos[edge_a[1]], (crossing.pos.x, crossing.pos.y))
+                            edge_b_percentage = draw_cd.projection_position(pos[edge_b[0]], pos[edge_b[1]], (crossing.pos.x, crossing.pos.y))
+
+                            cr_idx = crossings_per_edge[edge_a].index(crossing)
+
+                            m.addConstr( (d[edge_a_idx] + l[edge_a_idx] * edge_a_percentage)  # Height of edge a at crossing
+                                         - (d[edge_b_idx] + l[edge_b_idx] * edge_b_percentage) # Height of edge b at crossing
+                                         + 2 * (1 - c[edge_a_idx, cr_idx]) # Only apply constraint if edge_a is a top_edge
+                                         >= 0, name=f"realizable_model_{edge_a_idx}_{edge_b_idx}" )
 
             # Solve
 
