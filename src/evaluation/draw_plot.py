@@ -6,7 +6,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 from scipy.interpolate import make_interp_spline
 
-from cased_drawings import OptimizationGoal, CasedDrawingModel
+from solve_cd import OptimizationGoal, CasedDrawingModel
 
 matplotlib.rcParams.update(
     {

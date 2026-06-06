@@ -1,4 +1,5 @@
 import logging
+
 import matplotlib
 
 logging.basicConfig(
@@ -12,9 +13,9 @@ import random
 import networkx as nx
 from matplotlib import pyplot as plt
 
-import cased_drawings
+import solve_cd
 import draw_cd
-from cased_drawings import CasedDrawingModel, OptimizationGoal
+from solve_cd import CasedDrawingModel, OptimizationGoal
 
 random.seed(123)
 
@@ -95,7 +96,7 @@ for mod_idx, model in enumerate([m.value for m in CasedDrawingModel]):
         ax.set_aspect("equal")
         print(goal)
         print(model)
-        casing, cost = cased_drawings.encase_drawing(
+        casing, cost = solve_cd.encase_drawing(
             random_graph, OptimizationGoal(goal), CasedDrawingModel(model)
         )
 
