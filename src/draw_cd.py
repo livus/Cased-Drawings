@@ -6,7 +6,6 @@ import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 from shapely.geometry.linestring import LineString
-from shapely.geometry.polygon import Polygon
 
 
 class EncasedCrossing(gx.crossings.Crossing):
@@ -75,6 +74,37 @@ def _convert_edge_to_polygon(edge, pos, edge_width):
     return line_segment.buffer(edge_width, cap_style="flat")
 
 
+def _draw_switches(pos, casing, ax):
+    # compute switch positions: crossings per edge and detect changes
+    crossings_per_edge = get_crossings_per_edge_sorted(casing, pos)
+    for edge, crossing_list in crossings_per_edge.items():
+        # iterate adjacent crossings on this edge
+        for i in range(len(crossing_list)-1):
+            c1 = crossing_list[i]
+            c2 = crossing_list[i+1]
+            # find top_edge for these crossings
+            top1 = None
+            top2 = None
+            # crossing objects in casing are EncasedCrossing with top_edge
+            # find matching encased crossing objects from casing list
+            # crossing equality by position
+            for ec in casing:
+                if abs(ec.pos.x - c1.pos.x) < 1e-9 and abs(ec.pos.y - c1.pos.y) < 1e-9:
+                    top1 = ec.top_edge
+                if abs(ec.pos.x - c2.pos.x) < 1e-9 and abs(ec.pos.y - c2.pos.y) < 1e-9:
+                    top2 = ec.top_edge
+            # If top edges differ on this edge, it's a switch
+            if top1 is None or top2 is None:
+                continue
+            # For edge-specific comparison, check whether top1==edge and top2==edge etc.
+            differs = (top1 == edge) != (top2 == edge)
+            if differs:
+                # mark switch position at midpoint between the two crossing points
+                x = (c1.pos.x + c2.pos.x) / 2.0
+                y = (c1.pos.y + c2.pos.y) / 2.0
+                ax.plot(x, y, marker='o', color='magenta', markersize=8)
+
+
 def draw_cased_edges(
     g: nx.Graph(),
     casing: List[EncasedCrossing],
@@ -117,13 +147,20 @@ def draw_cased_graph(
     ax=None,
     edge_width: float = 0.005,
     tunnel_width: float = 0.05,
+    node_size: float = 12,
+    draw_switches: bool = True
 ) -> None:
-    pos = gdMetriX.normalize_positions(
-        g, gdMetriX.get_node_positions(g), preserve_aspect_ratio=False
+    pos = gdMetriX.get_node_positions(g)
+    gdMetriX.normalize_positions(
+        g, gdMetriX.get_node_positions(g), preserve_aspect_ratio=True
     )
 
     if ax is None:
         ax = plt.gca()
 
+    ax.set_aspect("equal", adjustable="box")
+
     draw_cased_edges(g, casing, pos, edge_width, tunnel_width, ax)
-    nx.draw_networkx_nodes(g, pos, ax=ax, node_size=12, node_color="black")
+    nx.draw_networkx_nodes(g, pos, ax=ax, node_size=node_size, node_color="black")
+    if draw_switches:
+        _draw_switches(pos, casing, ax)
